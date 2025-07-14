@@ -1,0 +1,13 @@
+---
+- name: Generate cloud-init configuration
+  hosts: localhost
+  tasks:
+    - name: Create cloud-init configuration
+      ansible.builtin.template:
+        src: cloudinit.yml.j2
+        dest: cloudinit.yml
+    - name: Create rancher-lima configuration
+      ansible.builtin.template:
+        src: rancher-lima.yml.j2
+        dest: rancher-lima.yml
+
