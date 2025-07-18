@@ -1,0 +1,24 @@
+{%- set rancher_version = rancher_version | default('v2.11.2') %}
+{%- set rancher_hostname = rancher_hostname | default('rancher.yourdomain.com') %}
+{%- set rancher_bootstrap_password = rancher_bootstrap_password | default('admin') %}
+{%- set rancher_replicas = rancher_replicas | default(3) +%}
+{%- set rancher_repo = rancher_repo | default('https://releases.rancher.com/server-charts/stable') %}
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+    name: rancher
+    namespace: kube-system
+spec:
+    chart: rancher
+    repo: {{ rancher_repo }}
+    targetNamespace: cattle-system
+    createNamespace: true
+    version: {{ rancher_version }}
+    valuesContent: |-
+        hostname: {{ rancher_hostname }}
+        bootstrapPassword: {{ rancher_bootstrap_password }}
+        replicas: {{ rancher_replicas }}
+        ## STIG Configs
+        auditLog:
+          level: 2

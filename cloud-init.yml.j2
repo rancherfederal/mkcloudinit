@@ -1,0 +1,99 @@
+{%- set rke2_servers = rke2_servers | default(['localhost']) -%}
+{%- set rke2_agents = rke2_agents | default(false) -%}
+{%- set install_rke2_server = install_rke2_server | default(true) -%}
+{%- set default_admin = default_admin | default(true) -%}
+{%- set admin_password = admin_password | default(false) -%}
+{%- set admin_ssh_keys = admin_ssh_keys | default(false) -%}
+{%- set install_certmanager = install_certmanager | default(true) -%}
+{%- set install_rancher = install_rancher | default(true) -%}
+{%- set rke2_ansible_playbook_url = rke2_ansible_playbook_url | default('https://github.com/rancherfederal/rke2-ansible.git') +%}
+{#- TODO add a system version pin for more reproducibilty +#}
+#cloud-config 
+package_update: true
+package_upgrade: true
+{%- if default_admin +%}
+users:
+- default
+- name: admin
+  sudo: ['ALL=(ALL) NOPASSWD:ALL']
+  shell: /bin/bash
+  {%- if admin_ssh_keys +%}
+  ssh_authorized_keys:
+  {%- for key in admin_ssh_keys %}
+  - {{ key }}
+  {%- endfor %}
+  {%- endif %}
+  {%- if admin_password +%}
+  passwd: {{ admin_password }}
+  lock_passwd: false
+  {%- endif %}
+{%- endif %}
+
+{%- if install_rke2_server +%}
+packages:
+- git
+- ansible-core
+{#
+ansible:
+  install_method: distro
+  package_name: ansible-core
+  inventory: /etc/ansible/inventory/hosts.yml
+  pull:
+    url: "{{ rke2_ansible_playbook_url }}"
+    playbook_name: /etc/ansible/playbooks/rke2-install-local.yml
+#}
+runcmd:
+- ansible-pull -U {{ rke2_ansible_playbook_url }} -i /etc/ansible/inventory/hosts.yml /etc/ansible/playbooks/rke2-install-local.yml
+write_files:
+- path: /etc/ansible/ansible.cfg
+  content: |
+    [defaults]
+    roles_path = /etc/ansible/roles
+    playbook_dir = /etc/ansible/playbooks
+- path: /etc/ansible/playbooks/rke2-install-local.yml
+  content: |
+    ---
+    - name: Install RKE2 Server
+      hosts:
+      {%- for host in rke2_servers +%}
+      - {{ host }}
+      {% endfor +%}
+      {%- if rke2_agents +%}
+      {%- for host in rke2_agents +%}
+      - {{ host }}
+      {%- endfor +%}
+      {%- endif -%}
+      roles:
+      - role: rke2
+- path: /etc/ansible/inventory/hosts.yml
+  content: |
+    ---
+    rke2_cluster:
+      children:
+        rke2_servers:
+          hosts:
+            {%- for host in rke2_servers +%}
+            {{ host }}:
+            {%- endfor %}
+        {%- if rke2_agents +%}
+        rke2_agents:
+          hosts:
+            {%- for host in rke2_agents +%}
+            {{ host }}:
+            {%- endfor %}
+        {%- endif %}
+{%- endif %}
+{%- if install_certmanager +%}
+- path: /var/lib/rancher/rke2/server/manifests/post-deploy-manifests/cert-manager.yaml
+  content: |
+    {%- filter indent(width=4) %}
+    {%- include 'certmanager-helmchart.yml.j2' %}
+    {%- endfilter +%}
+{%- endif %}
+{%- if install_rancher +%}
+- path: /var/lib/rancher/rke2/server/manifests/post-deploy-manifests/rancher.yaml
+  content: |
+    {% filter indent(width=4) %}
+    {%- include 'rancher-helmchart.yml.j2' %}
+    {%- endfilter +%}
+{%- endif +%}

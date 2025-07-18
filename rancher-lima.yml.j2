@@ -1,20 +1,12 @@
-{% set rke2_servers = rke2_servers | default(['rancher-lima']) %}
-{% set rke2_agents = rke2_agents | default(false) %}
-{% set install_rke2_server = install_rke2_server | default(true) %}
-{% set default_admin = default_admin | default(true) %}
-{% set admin_password = admin_password | default(false) %}
-{% set admin_ssh_keys = admin_ssh_keys | default(false) %}
-{% set install_certmanager = install_certmanager | default(true) %}
-{% set install_rancher = install_rancher | default(true) %}
-{% set rancher_vm_ip = rancher_vm_ip | default("127.0.0.1") %}"
+{%- set rancher_vm_ip = rancher_vm_ip | default( '127.0.0.1' ) -%}
 {# Override defaults for the certmanager chart to optimise for one node #}
-    {% set cert_manager_replica_count = cert_manager_replica_count | default(1) %}
-    {% set cert_manager_webhook_replica_count = cert_manager_webhook_replica_count | default(1) %}
-    {% set cert_manager_cainjector_replica_count = cert_manager_cainjector_replica_count | default(1) %}
+  {%- set cert_manager_replica_count = cert_manager_replica_count | default(1) -%}
+  {%- set cert_manager_webhook_replica_count = cert_manager_webhook_replica_count | default(1) -%}
+  {%- set cert_manager_cainjector_replica_count = cert_manager_cainjector_replica_count | default(1) -%}
 {# Override defaults for the rancher chart to optimise for one node #}
-    {% set rancher_replicas = rancher_replicas | default(1) %}
-    {% set rancher_hostname = rancher_hostname | default("rancher-{% rancher_vm_ip %}.sslip.io") %}
-arch: "x86_64"
+  {%- set rancher_replicas = rancher_replicas | default(1) -%}
+  {%- set rancher_hostname = rancher_hostname | default( 'rancher-' + rancher_vm_ip|string + '.sslip.io' ) -%}
+arch: "aarch64"
 images:
   # Fallback to the latest release image.
   # Hint: run `limactl prune` to invalidate the cache
@@ -23,38 +15,39 @@ images:
   - location: "https://dl.rockylinux.org/pub/rocky/9/images/aarch64/Rocky-9-GenericCloud.latest.aarch64.qcow2"
     arch: "aarch64"
 
-cpus: {{ [ansible_facts['processor_count'] * 0.8 | int, 4 ] | min }}
-memory: "{{ [ansible_facts['memtotal_mb'] * 0.8 | int, 16000] | min }}MiB"
+cpus: {{ [ ansible_processor_cores|int - 1 , 4 ] | min }}
+memory: "{{ [ ansible_facts['memtotal_mb'] - 2000 , 20000 ] | min }}MiB"
 disk: "100GiB"
 
 ## Issue the ansible playbook ran into errors when it hit the apple Mac mounts
 ## it also shouldn't matter for this. Issue probally stems from the fact 9p is broken in Linux v6.9, v6.10, and v6.11.
 ## The issue was fixed in Linux v6.12-rc5 (https://github.com/torvalds/linux/commit/be2ca38).
-#mounts:
-#  - location: "~"
-#  - location: "/tmp/lima"
-#    writable: tru
+mountType: "reverse-sshfs"
+mounts:
+ - location: "~"
+ - location: "/tmp/lima"
 
 containerd:
   system: false
   user: false
 
+networks:
+  - vzNAT: true
+
 portForwards:
-  - guestIP: "{% rancher_vm_ip %}"
+  - guestIP: "{{ rancher_vm_ip }}"
     guestPort: 80
     hostPort: 80
-  - guestIP: "{% rancher_vm_ip %}"
+  - guestIP: "{{ rancher_vm_ip }}"
     guestPort: 443
     hostPort: 443
-  - guestIP: "{% rancher_vm_ip %}"
+  - guestIP: "{{ rancher_vm_ip }}"
     guestPort: 6443
     hostPort: 6443
-  - guestIP: "{% rancher_vm_ip %}"
+  - guestIP: "{{ rancher_vm_ip }}"
     guestPort: 8472
     hostPort: 8472
 ## TODO add rancher port range
-
-
 
 provision:
   - mode: system
@@ -67,256 +60,7 @@ provision:
     script: |
       #!/bin/bash
       cat <<EOF > /etc/cloud/cloud.cfg.d/99_custom.cfg
-      {# TODO get the include to keep the proper indentation
-      {% include 'cloudinit.yml.j2' | indent(6) %}
-      #}
-      {% set rke2_ansible_playbook_url = rke2_ansible_playbook_url | default('https://github.com/rancherfederal/rke2-ansible.git') %}
-      #cloud-config
-      ## TODO add a system version pin for more reproducibilty
-      package_update: true
-      package_upgrade: true
-
-    {% if default_admin | default(false) %}
-      users:
-        - default
-        - name: admin
-          sudo: ['ALL=(ALL) NOPASSWD:ALL']
-          shell: /bin/bash
-        {% if admin_ssh_keys %}
-          ssh_authorized_keys:
-          {% for key in admin_ssh_keys %}
-            - {{ key }}
-          {% endfor %}
-        {% endif %}
-        {% if admin_password %}
-          passwd: {{ admin_password }}
-          lock_passwd: false
-        {% endif %}
-    {% endif %}
-    {% if install_rke2_server | default(true) %}
-      packages:
-        - git
-        - ansible-core
-      ansible:
-        install_method: distro
-        package_name: ansible-core
-        pull:
-          url: "{% rke2_ansible_playbook_url %}"
-          playbook_name: /etc/ansible/playbooks/rke2-install-local.yml
-      write_files:
-        - path: /etc/ansible/ansible.cfg
-          content: |
-            [defaults]
-            roles_path = /etc/ansible/roles
-            playbook_dir = /etc/ansible/playbooks
-        - path: /etc/ansible/playbooks/rke2-install-local.yml
-          content: |
-            ---
-            - name: Install RKE2 Server
-              hosts: localhost
-              roles:
-                - role: rke2
-        - path: /etc/ansible/inventories/local.yml
-          content: |
-          ---
-          rke2_cluster:
-            children:
-              rke2_servers:
-                hosts:
-                {% for host in rke2_servers %}
-                  {{ host }}:
-                {% endfor %}
-            {% if rke2_agents %}
-              rke2_agents:
-                hosts:
-                {% for host in rke2_agents %}
-                  {{ host }}:
-                {% endfor %}
-            {% endif %}
-    {% endif %}
-{% if install_certmanager | default(true) %}
-  - path: /var/lib/rancher/rke2/server/manifests/post-deploy-manifests/cert-manager.yaml
-    content: |
-    {# TODO change to an include that preserves indent #}
-    {% set cert_manager_replica_count = cert_manager_replica_count | default(2) %}
-    {% set cert_manager_version = cert_manager_version | default('v1.18.0') %}
-    {% set cert_manager_repo = cert_manager_repo | default('https://charts.jetstack.io') %}
-    {% set cert_manager_webhook_replica_count = cert_manager_webhook_replica_count | default(3) %}
-    {% set cert_manager_cainjector_replica_count = cert_manager_cainjector_replica_count | default(2) %}
-      ---
-      apiVersion: helm.cattle.io/v1
-      kind: HelmChart
-      metadata:
-        name: cert-manager
-        namespace: kube-system
-      spec:
-        chart: cert-manager
-        repo: {{ cert_manager_repo }}
-        targetNamespace: cert-manager
-        createNamespace: true
-        version: {{ cert_manager_version }}
-        bootstrap: true
-        valuesContent: |-
-          # Helm chart values which make cert-manager comply with CIS, BSI and NSA
-          # security benchmarks and other best practices for deploying cert-manager in
-          # production.
-          crds:
-            enabled: true
-          global:
-            priorityClassName: system-cluster-critical
-          replicaCount: {% cert_manager_replica_count %}
-          podDisruptionBudget:
-            enabled: true
-            minAvailable: 1
-          automountServiceAccountToken: true
-          serviceAccount:
-            automountServiceAccountToken: true
-          volumes:
-          - name: serviceaccount-token
-            projected:
-              defaultMode: 0444
-              sources:
-              - serviceAccountToken:
-                  expirationSeconds: 3607
-                  path: token
-              - configMap:
-                  name: kube-root-ca.crt
-                  items:
-                  - key: ca.crt
-                    path: ca.crt
-              - downwardAPI:
-                  items:
-                  - path: namespace
-                    fieldRef:
-                      apiVersion: v1
-                      fieldPath: metadata.namespace
-          volumeMounts:
-          - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-            name: serviceaccount-token
-            readOnly: true
-          webhook:
-            replicaCount: {% cert_manager_webhook_replica_count %}
-            podDisruptionBudget:
-              enabled: true
-              minAvailable: 1
-            automountServiceAccountToken: true
-            serviceAccount:
-              automountServiceAccountToken: true
-            volumes:
-            - name: serviceaccount-token
-              projected:
-                defaultMode: 0444
-                sources:
-                - serviceAccountToken:
-                    expirationSeconds: 3607
-                    path: token
-                - configMap:
-                    name: kube-root-ca.crt
-                    items:
-                    - key: ca.crt
-                      path: ca.crt
-                - downwardAPI:
-                    items:
-                    - path: namespace
-                      fieldRef:
-                        apiVersion: v1
-                        fieldPath: metadata.namespace
-            volumeMounts:
-            - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              name: serviceaccount-token
-              readOnly: true
-          cainjector:
-            extraArgs:
-            - --namespace=cert-manager
-            - --enable-certificates-data-source=false
-            replicaCount: {% cert_manager_cainjector_replica_count %}
-            podDisruptionBudget:
-              enabled: true
-              minAvailable: 1
-            automountServiceAccountToken: true
-            serviceAccount:
-              automountServiceAccountToken: true
-            volumes:
-            - name: serviceaccount-token
-              projected:
-                defaultMode: 0444
-                sources:
-                - serviceAccountToken:
-                    expirationSeconds: 3607
-                    path: token
-                - configMap:
-                    name: kube-root-ca.crt
-                    items:
-                    - key: ca.crt
-                      path: ca.crt
-                - downwardAPI:
-                    items:
-                    - path: namespace
-                      fieldRef:
-                        apiVersion: v1
-                        fieldPath: metadata.namespace
-            volumeMounts:
-            - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              name: serviceaccount-token
-              readOnly: true
-          startupapicheck:
-            automountServiceAccountToken: true
-            serviceAccount:
-              automountServiceAccountToken: true
-            volumes:
-            - name: serviceaccount-token
-              projected:
-                defaultMode: 0444
-                sources:
-                - serviceAccountToken:
-                    expirationSeconds: 3607
-                    path: token
-                - configMap:
-                    name: kube-root-ca.crt
-                    items:
-                    - key: ca.crt
-                      path: ca.crt
-                - downwardAPI:
-                    items:
-                    - path: namespace
-                      fieldRef:
-                        apiVersion: v1
-                        fieldPath: metadata.namespace
-            volumeMounts:
-            - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              name: serviceaccount-token
-              readOnly: true
-  {% endif %}
-  {% if install_rancher %}
-  - path: /var/lib/rancher/rke2/server/manifests/post-deploy-manifests/rancher.yaml
-    content: |
-    {# TODO change to include rancher.j2.yml with indent preserved #}
-    {% set rancher_version = rancher_version | default('v2.11.2') }}
-    {% set rancher_hostname = rancher_hostname | default('rancher.yourdomain.com') %}
-    {% set rancher_bootstrap_password = rancher_bootstrap_password | default('admin') %}
-    {% set rancher_replicas = rancher_replicas | default(3) %}
-      ---
-      apiVersion: helm.cattle.io/v1
-      kind: HelmChart
-      metadata:
-        name: rancher
-        namespace: kube-system
-      spec:
-        chart: rancher
-        repo: {{ rancher_repo | default('https://releases.rancher.com/server-charts/stable') }}
-        targetNamespace: cattle-system
-        createNamespace: true
-        version: {{ rancher_version }}
-        bootstrap: true
-        valuesContent: |-
-          hostname: {{ rancher_hostname }}
-          bootstrapPassword: {{ rancher_bootstrap_password }}
-          replicas: {{ rancher_replicas }}
-          ## STIG Configs
-          auditLog:
-            level: 2
-    {% endif %}
-  {% endif %}
-
+      {%- filter indent(width=6) %}
+      {%- include 'cloud-init.yml.j2' %}
+      {%- endfilter +%}
       EOF
-{% endif %}
